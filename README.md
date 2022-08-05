@@ -16,6 +16,10 @@ As decompilation isn't working, all we have is the disassembly.
 
 The reference for all the bytecode instructions can be found on `dis` package's [docs](https://docs.python.org/3/library/dis.html#python-bytecode-instructions).
 
+You probably want to start with the `<module>` code block and follow the code instructions (defining functions, classes, methods).
+If the compiled program isn't super complex, you can recreate the original Python source pretty closely.
+Well, probably close enough.
+
 ## Running from source
 Requires Python 3.10 or higher for 'match' ([PEP 636](https://peps.python.org/pep-0636/)).
 Consider using the [docker method](#running-with-docker) below.
