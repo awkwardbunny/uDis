@@ -6,6 +6,7 @@ import os
 import subprocess
 from dataclasses import dataclass
 from typing import List, Dict, Any
+from pprint import pprint
 
 import coloredlogs
 
@@ -88,37 +89,108 @@ def write_dis_to_file(cb: Dict[str, CodeBlock], filepath: str):
             out_f.write("\n")
 
 
+class Buffer:
+    buf: List[str] = list()
+
+    def append(self, s: str):
+        log.debug(f">>{s}<<")
+        self.buf.append(s)
+
+
+class Stack:
+    buf: List[Any] = list()
+
+    def push(self, v: Any):
+        self.buf.insert(0, v)
+
+    def pop(self) -> Any:
+        return self.buf.pop(0)
+
+    def dump(self) -> str:
+        return f"{self.buf}"
+
+    def peek(self, i: int = 0) -> Any:
+        return self.buf[i]
+
+
 def decompile_code_block(name: str,
                          blocks: Dict[str, CodeBlock],
-                         buf: List[str],
-                         stack: List[Any],
+                         buf: Buffer,
+                         stack: Stack,
                          tab_width: int = 4,
                          depth: int = 0):
     tab = " " * tab_width
     current_block = blocks[name]
 
-    log.debug("TODO")
+    log.warning("Decompilation machine broken... Come back tomorrow...")
+    return
 
-    # test
-    buf.append(f"{tab * depth}{{")
-    if depth < 5:
-        decompile_code_block(name, blocks, buf, stack, tab_width, depth + 1)
-    buf.append(f"{tab * depth}}}")
+    history: List[str] = list()
+    for bc in current_block.bytecode:
+        log.debug(bc)
 
-    # for bc in current_block.bytecode:
-    #     log.debug(bc)
-    #     match bc.split():
-    #         case [offset, "LOAD_CONST_SMALL_INT" val]:
-    #
-    #         case x:
+        offset, op, *args = bc.split()
+        offset = int(offset)
+
+        match op:
+            case "LOAD_CONST_SMALL_INT":
+                stack.push(int(args[0]))
+            case "LOAD_CONST_NONE":
+                stack.push(None)
+            case "IMPORT_NAME":
+                import_from = stack.pop()
+                import_level = stack.pop()
+                stack.push({
+                    "import_level": import_level,
+                    "import_from": import_from,
+                    "name": args[0][1:-1]
+                })
+            case "IMPORT_FROM":
+                module = stack.peek()
+                name = args[0][1:-1]
+                module['import_from'] = module['name']
+                module['name'] = name
+                stack.push(module)
+            case "STORE_NAME":
+                val = stack.peek()
+                if history[0].startswith("IMPORT"):
+                    if val['import_from'] is not None:
+                        if val['name'] == args[0]:
+                            buf.append(f"from {val['import_from']} import {val['name']}")
+                        else:
+                            buf.append(f"from {val['import_from']} import {val['name']} as {args[0]}")
+                    else:
+                        if val['name'] == args[0]:
+                            buf.append(f"import {val['name']}")
+                        else:
+                            buf.append(f"import {val['name']} as {args[0]}")
+
+                else:
+                    log.warning("TODO")
+            case "LOAD_CONST_STRING":
+                stack.push(args[0][1:-1])
+            case "BUILD_TUPLE":
+                tuple_list = []
+                for _ in range(int(args[0])):
+                    tuple_list.append(stack.pop())
+                stack.push(tuple(tuple_list))
+            case "POP_TOP":
+                stack.pop()
+            case x:
+                log.warning(f"Unknown instruction '{x}' at offset {offset}")
+
+        history.insert(0, op)
+        if len(history) > 10:
+            history = history[:10]
+        log.debug(f"Stack: {stack.dump()}")
 
 
 def decompile(module_name: str, dis: Dict[str, CodeBlock], fn_dec: str):
     log.info(f"Decompiling '{module_name}'...")
     timestamp = datetime.datetime.now()
 
-    buf: List[str] = []
-    stack: List[Any] = []
+    buf = Buffer()
+    stack = Stack()
     decompile_code_block('<module>', dis, buf, stack)
 
     with open(fn_dec, 'w') as out_f:
@@ -126,7 +198,7 @@ def decompile(module_name: str, dis: Dict[str, CodeBlock], fn_dec: str):
         out_f.write(f"## Decompiled with uDis ({VERSION}) ##\n")
         out_f.write(f"## At: {timestamp} ##\n")
         out_f.write(f"####################################\n\n")
-        for line in buf:
+        for line in buf.buf:
             out_f.write(f"{line}\n")
 
 
