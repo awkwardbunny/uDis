@@ -3,8 +3,18 @@ MicroPython Decompiler
 
 Currently uses v1.18 release of [MicroPython](https://github.com/micropython/micropython), which uses bytecode version 5 ([doc](http://docs.micropython.org/en/latest/reference/mpyfiles.html#versioning-and-compatibility-of-mpy-files))
 
-Disassembly works.  
+The bytecode is generated from MicroPython itself. The `micropython/micropython` binary is the built Unix port of the MicroPython interpreter. Docs on building it can be found [here](https://docs.micropython.org/en/latest/develop/gettingstarted.html#building-the-unix-port-of-micropython)
+
+Bytecode version 6 for MicroPython v1.19+ should be fairly easy to support by replacing `micropython/micropython` binary (and maybe minor modifications to `main.py`).
+
+Disassembly works.
 Decompile not working yet.
+
+## Understanding the Python Bytecode
+The program will output the disassembled bytecode and decompiled source.
+As decompilation isn't working, all we have is the disassembly.
+
+The reference for all the bytecode instructions can be found on `dis` package's [docs](https://docs.python.org/3/library/dis.html#python-bytecode-instructions).
 
 ## Running from source
 Requires Python 3.10 or higher for 'match' ([PEP 636](https://peps.python.org/pep-0636/)).
