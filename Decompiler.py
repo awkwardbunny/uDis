@@ -2,7 +2,7 @@
 import logging
 from dataclasses import dataclass, field
 from pprint import pprint, pformat
-from typing import List, Dict, Any, Union
+from typing import List, Dict, Any, Union, Set
 
 import coloredlogs
 
@@ -20,11 +20,20 @@ class Bytecode:
     lineno: Union[int | None]
     attr: Dict[Any, Any] = field(default_factory=dict)
 
+    def line_str(self) -> str:
+        return f"   # line {self.lineno}" if self.lineno is not None else ""
+
+    def __str__(self) -> str:
+        return f"{self.offset} {self.opcode} {self.operands}{self.line_str()}"
+
 
 @dataclass
 class BasicBlock:
     label: str
     bytecode: Dict[int, Bytecode]
+
+    def add_bytecode(self, b: Bytecode):
+        self.bytecode[b.offset] = b
 
 
 @dataclass
@@ -66,8 +75,6 @@ class LineBuffer:
 
 
 class uDecompiler:
-    # file_name: str
-    # module_name: str
     top_desc: str
     blocks: Dict[str, CodeBlock] = dict()
 
@@ -84,13 +91,59 @@ class uDecompiler:
 
     def decompile(self, start_name: str = "<module>") -> str:
         log.info("Running decompilation...")
-
         # log.debug(pformat(self.blocks))
+
+        log.info("* Pass 0: Break down basic blocks")
+        self.pass_0()
 
         # for now
         output = self.disassemble()
         # log.debug(output)
         return output
+
+    def pass_0(self):
+        for codeblock in self.blocks.values():
+            # log.debug(f"** PASS_0 :: {codeblock.name}")
+            block_0 = codeblock.blocks[0]  # There should only be one at this point
+
+            jmp_targets: Set[int] = set()
+            for bc in block_0.bytecode.values():
+                # log.debug(f"** Processing :: {bc}")
+                if bc.opcode == "UNWIND_JUMP":
+                    targets = bc.operands.split()
+                    jmp_targets.add(int(targets[0]))
+                    jmp_targets.add(int(targets[1]))
+                elif "JUMP" in bc.opcode:
+                    target = int(bc.operands)
+                    # log.warning(f"Found jump: {bc.offset} -> {target}")
+                    jmp_targets.add(target)
+            jmp_targets: List[int] = sorted(jmp_targets)
+            if len(jmp_targets) == 0:
+                # log.debug("No jump targets; skipping")
+                continue
+
+            jmp_targets.insert(0, 0)
+            # log.debug(f"JUMP_TARGETS: {jmp_targets}")
+            jmp_targets.append(9999)
+
+            blocks: List[BasicBlock] = list()
+            bytecodes: Dict[int, Bytecode] = dict()
+            i = 0
+            for offset, bc in block_0.bytecode.items():
+                if i == len(jmp_targets) - 1:
+                    blocks.append(BasicBlock(f"L{jmp_targets[i-1]}", bytecodes))
+                    break
+
+                start = jmp_targets[i]
+                stop = jmp_targets[i+1]
+                if start <= offset < stop:
+                    bytecodes[offset] = bc
+                else:
+                    blocks.append(BasicBlock(f"L{start}", bytecodes))
+                    bytecodes = dict()
+                    bytecodes[offset] = bc
+                    i += 1
+            codeblock.blocks = blocks
 
     def disassemble(self) -> str:
         buf = LineBuffer([], log, False)
@@ -101,8 +154,7 @@ class uDecompiler:
             for bb in block.blocks:
                 buf.append(f"{bb.label}:")
                 for bc in bb.bytecode.values():
-                    lineinfo = f"    # line {bc.lineno}" if bc.lineno is not None else ""
-                    buf.append(f"  {bc.opcode} {bc.operands}{lineinfo}")
+                    buf.append(f"  {bc.opcode} {bc.operands}{bc.line_str()}")
             buf.newline()
         return buf.dump()
 

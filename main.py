@@ -58,6 +58,9 @@ def disassemble(filename: str) -> Dict[str, CodeBlock]:
     code_blocks: Dict[str, CodeBlock] = dict()
     current_block: CodeBlock = None
     for line in output:
+        if line.startswith("mem"):
+            break  # end of disassmbly
+
         if len(line.strip()) == 0:
             continue
         if line[0] == '(' or line.startswith("Raw bytecode"):
@@ -91,7 +94,17 @@ def disassemble(filename: str) -> Dict[str, CodeBlock]:
             continue
 
         parts = line.split()
-        num = int(parts[0])
+
+        # HACKY: handle edge case where a newline inside const was printed
+        try:
+            num = int(parts[0])
+        except ValueError:
+            last = current_block.bytecode[-1]
+            offset, op, args = last
+            args += "\n" + line
+            current_block.bytecode[-1] = (offset, op, args)
+            continue
+
         instr = parts[1]
         operands = ' '.join(parts[2:])
         current_block.add_bytecode((num, instr, operands))
@@ -107,7 +120,7 @@ def write_dis_to_file(cb: Dict[str, CodeBlock], filepath: str):
             out_f.write(f"# def {b.name}({','.join(b.args)}) #{b.descriptor}\n")
             out_f.write(f"{b.name}:\n")
             for bc in b.bytecode:
-                out_f.write(f"  {bc}\n")
+                out_f.write(f"  {bc[1]} {bc[2]}\n")
             out_f.write("\n")
 
 
