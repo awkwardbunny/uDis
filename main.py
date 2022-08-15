@@ -6,10 +6,11 @@ import os
 import subprocess
 import traceback
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Callable, Tuple, Union
+from typing import List, Dict, Any, Callable, Tuple, Union, Iterator
 from pprint import pprint
 
 from lark import Lark
+from lark.lexer import Lexer, Token
 import coloredlogs
 
 log = logging.getLogger(__name__)
@@ -22,6 +23,11 @@ def get_git_version() -> str:
 
 
 VERSION = get_git_version()
+
+
+def getGrammar(fn: str) -> str:
+    with open(fn, 'r') as f:
+        return f.read()
 
 
 @dataclass
@@ -74,6 +80,17 @@ class Buffer:
     def dump(self) -> str:
         return ''.join(self.buf)
 
+
+class uDisLexer(Lexer):
+    def __init__(self, _lexer_conf):
+        pass
+
+    def lex(self, data) -> Iterator[Token]:
+        for block in data.blocks.values():
+            yield Token("METADATA", (block.source, block.name, block.args))
+            for bc in block.code.values():
+                yield Token(bc.opcode, (bc.offset, bc.operands))
+
 class uDecompiler:
     filename: str
     module_name: str
@@ -82,10 +99,10 @@ class uDecompiler:
     tab: str = " " * 4
     blocks: Dict[str, CodeBlock] = None
 
-    def __init__(self, mpy_fn: str, module_name: str):
+    def __init__(self, mpy_fn: str, module_name: str, grammar_file: str = "upython.grammar"):
         self.filename = mpy_fn
         self.module_name = module_name
-        self.parser = None  # TODO
+        self.parser = Lark(getGrammar(grammar_file), parser="lalr", lexer=uDisLexer)
 
     def disassemble(self):
         log.info("Disassembling")
@@ -199,6 +216,10 @@ class uDecompiler:
         buf.print(f"####################################\n")
 
         # TODO
+        l = uDisLexer(None)
+        for x in l.lex(self):
+            log.debug(f"{x.type}: {x.value}")
+        # self.parser.parse(self)
 
         buf.print()
         return buf.dump()
