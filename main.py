@@ -85,11 +85,15 @@ class uDisLexer(Lexer):
     def __init__(self, _lexer_conf):
         pass
 
-    def lex(self, data) -> Iterator[Token]:
-        for block in data.blocks.values():
-            yield Token("METADATA", (block.source, block.name, block.args))
-            for bc in block.code.values():
-                yield Token(bc.opcode, (bc.offset, bc.operands))
+    def lex(self, block) -> Iterator[Token]:
+        pprint(Token("METADATA", (block.source, block.name, block.args)))
+        yield Token("METADATA", (block.source, block.name, block.args))
+        for bc in block.code.values():
+            # if bc.lineno is not None:
+                # pprint(Token("LINE", bc.lineno))
+                # yield Token("LINE", bc.lineno)
+            pprint(Token(bc.opcode, (bc.offset, bc.operands)))
+            yield Token(bc.opcode, (bc.offset, bc.operands))
 
 class uDecompiler:
     filename: str
@@ -217,9 +221,14 @@ class uDecompiler:
 
         # TODO
         l = uDisLexer(None)
-        for x in l.lex(self):
-            log.debug(f"{x.type}: {x.value}")
-        # self.parser.parse(self)
+        # for x in l.lex(self):
+        #     log.debug(f"{x.type}: {x.value}")
+        trees = {}
+        for block in self.blocks.values():
+            trees[block.desc] = self.parser.parse(block)
+        for desc, t in trees.items():
+            pprint(desc)
+            pprint(t.pretty())
 
         buf.print()
         return buf.dump()

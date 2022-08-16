@@ -1,3 +1,69 @@
-start: X+
+start: METADATA line+
 
-%declare X
+line: other
+    | line_import
+    | line_store_attr
+    | line_call_method
+    | line_list
+
+line_import: load_instruction load_instruction IMPORT_NAME STORE_NAME
+line_store_attr: load_instruction load_instruction STORE_ATTR
+line_call_method: load_instruction LOAD_METHOD CALL_METHOD
+line_list: line+ BUILD_LIST
+
+other: load_instruction
+    | store_instruction
+    | raw_instruction
+
+load_instruction: LOAD_FAST
+    | LOAD_GLOBAL
+    | LOAD_ATTR
+    | LOAD_SUBSCR
+    | LOAD_METHOD
+    | LOAD_NAME
+    | LOAD_CONST_SMALL_INT
+    | LOAD_CONST_OBJ
+    | LOAD_CONST_STRING
+    | LOAD_CONST_FALSE
+    | LOAD_CONST_TRUE
+    | LOAD_CONST_NONE
+    | LOAD_BUILD_CLASS
+
+store_instruction: STORE_FAST
+    | STORE_GLOBAL
+    | STORE_ATTR
+    | STORE_COMP
+    | STORE_NAME
+
+raw_instruction: BUILD_LIST
+    | BUILD_TUPLE
+    | UNPACK_SEQUENCE
+    | GET_ITER_STACK
+    | FOR_ITER
+    | CALL_METHOD
+    | CALL_FUNCTION
+    | RETURN_VALUE
+    | MAKE_FUNCTION
+    | BINARY_OP
+    | POP_JUMP_IF_FALSE
+    | POP_JUMP_IF_TRUE
+    | JUMP
+    | POP_TOP
+    | SETUP_EXCEPT
+    | POP_EXCEPT_JUMP
+    | DUP_TOP
+    | END_FINALLY
+    | ROT_TWO
+    | IMPORT_NAME
+    | IMPORT_FROM
+
+%declare METADATA LINE \
+LOAD_FAST LOAD_GLOBAL LOAD_ATTR LOAD_METHOD LOAD_SUBSCR LOAD_NAME \
+LOAD_CONST_SMALL_INT LOAD_CONST_OBJ LOAD_CONST_STRING \
+LOAD_CONST_FALSE LOAD_CONST_TRUE LOAD_CONST_NONE \
+STORE_FAST STORE_GLOBAL STORE_ATTR STORE_COMP STORE_NAME \
+BUILD_LIST BUILD_TUPLE UNPACK_SEQUENCE GET_ITER_STACK FOR_ITER BINARY_OP ROT_TWO \
+CALL_METHOD CALL_FUNCTION RETURN_VALUE MAKE_FUNCTION \
+JUMP POP_JUMP_IF_TRUE POP_JUMP_IF_FALSE SETUP_EXCEPT POP_EXCEPT_JUMP END_FINALLY \
+POP_TOP DUP_TOP \
+IMPORT_NAME IMPORT_FROM LOAD_BUILD_CLASS
