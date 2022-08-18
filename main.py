@@ -4,13 +4,13 @@ import datetime
 import logging
 import os
 import subprocess
-import traceback
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Callable, Tuple, Union, Iterator
-from pprint import pprint
+from itertools import zip_longest
+from typing import List, Dict, Any, Union, Iterator
+from pprint import pprint, pformat
+from enum import Enum, auto
+import ast
 
-from lark import Lark
-from lark.lexer import Lexer, Token
 import coloredlogs
 
 log = logging.getLogger(__name__)
@@ -81,32 +81,66 @@ class Buffer:
         return ''.join(self.buf)
 
 
-class uDisLexer(Lexer):
-    def __init__(self, _lexer_conf):
-        pass
+class uDisObjType(Enum):
+    CONST = auto()
+    MODULE = auto()
+    VARIABLE = auto()
 
-    def lex(self, block) -> Iterator[Token]:
-        pprint(Token("METADATA", (block.source, block.name, block.args)))
-        yield Token("METADATA", (block.source, block.name, block.args))
-        for bc in block.code.values():
-            # if bc.lineno is not None:
-                # pprint(Token("LINE", bc.lineno))
-                # yield Token("LINE", bc.lineno)
-            pprint(Token(bc.opcode, (bc.offset, bc.operands)))
-            yield Token(bc.opcode, (bc.offset, bc.operands))
+
+@dataclass()
+class uDisObj:
+    ty: uDisObjType
+    val: Any
+
+
+def astStr(self):
+    return f"{self.__class__.__name__}: {vars(self)}"
+
+
+ast.AST.__str__ = astStr
+ast.AST.__repr__ = astStr
+
+
+class Stack:
+    data: List[ast.AST]
+
+    def __init__(self):
+        self.data = []
+
+    def push(self, v: ast.AST):
+        self.data.insert(0, v)
+
+    def pop(self) -> ast.AST:
+        return self.data.pop(0)
+
+    def peek(self, i: int = 0) -> ast.AST:
+        return self.data[i]
+
+    def dump(self, limit: int = 0) -> str:
+        output = "Stack:\n"
+        num = len(self.data) - 1
+        for d in self.data if limit == 0 else self.data[:limit]:
+            if isinstance(d, ast.AST):
+                output += f" {num} - {ast.dump(d)}\n"
+            else:
+                output += f" {num} - {d}\n"
+            num -= 1
+        return output
+        # return pformat(self.data if limit is 0 else self.data[:limit])
+
 
 class uDecompiler:
     filename: str
     module_name: str
-    parser: Lark
 
+    stack: Stack
     tab: str = " " * 4
     blocks: Dict[str, CodeBlock] = None
 
-    def __init__(self, mpy_fn: str, module_name: str, grammar_file: str = "upython.grammar"):
+    def __init__(self, mpy_fn: str, module_name: str):
         self.filename = mpy_fn
         self.module_name = module_name
-        self.parser = Lark(getGrammar(grammar_file), parser="lalr", lexer=uDisLexer)
+        self.stack = Stack()
 
     def disassemble(self):
         log.info("Disassembling")
@@ -125,6 +159,7 @@ class uDecompiler:
 
         current_block: CodeBlock = None
         for line in output:
+            print(line)
             if line.startswith("mem"):
                 break  # end of disassmbly
             if len(line.strip()) == 0:
@@ -166,7 +201,7 @@ class uDecompiler:
             try:
                 num = int(parts[0])
             except ValueError:
-                last = current_block.code[-1]
+                last = current_block.code[list(current_block.code)[-1]]
                 last.operands += "\n" + line
                 continue
 
@@ -206,7 +241,216 @@ class uDecompiler:
         buf.print()
         return buf.dump()
 
-    def decompile(self) -> str:
+    def pass_0(self, desc: str) -> List[ast.AST]:
+
+        cb = self.blocks[desc]
+        log.debug(f"Processing {cb.name}({cb.desc})")
+        tree: List[ast.stmt] = list()
+
+        aux_stack = Stack()
+
+        instrs = list(cb.code.values())
+        for instr, next in zip_longest(instrs, instrs[1:]):
+            log.debug(f"OPCODE: \"{instr.opcode} {instr.operands}\"")
+            match instr.opcode:
+                case "LOAD_CONST_SMALL_INT":
+                    self.stack.push(ast.Constant(int(instr.operands)))
+                case "LOAD_CONST_NONE":
+                    self.stack.push(ast.Constant(None))
+                case "LOAD_CONST_TRUE":
+                    self.stack.push(ast.Constant(True))
+                case "LOAD_CONST_FALSE":
+                    self.stack.push(ast.Constant(False))
+                case "LOAD_CONST_STRING":
+                    self.stack.push(ast.Constant(instr.operands[1:-1]))
+                case "LOAD_CONST_OBJ":
+                    data = '='.join(instr.operands.split('=')[1:])
+                    self.stack.push(ast.Constant(data[1:-1]))
+                case "LOAD_NAME":
+                    self.stack.push(ast.Name(instr.operands, ast.Load()))
+                case "IMPORT_NAME":
+                    fromlist = self.stack.pop()
+                    level = self.stack.pop()
+                    if isinstance(fromlist, ast.Constant) and fromlist.value is None:
+                        a = ast.alias(instr.operands[1:-1])
+                        x = ast.Import([a])
+                        aux_stack.push(instr.operands[1:-1])
+                        self.stack.push(x)
+                    elif isinstance(fromlist, ast.Tuple):
+                        a = [ast.alias(n.value) for n in fromlist.elts]
+                        for n in fromlist.elts:
+                            aux_stack.push(n.value)
+                        x = ast.Import(a)
+                        self.stack.push(x)
+                        aux_stack.push(instr.operands[1:-1])
+                case "IMPORT_FROM":
+                    i = self.stack.peek()
+                    if isinstance(i, ast.Import):
+                        ii = ast.ImportFrom(aux_stack.pop(), i.names, 0)
+                        self.stack.push(ii)
+                    else:
+                        ii = i
+                case "STORE_NAME":
+                    if len(aux_stack.data) != 0:
+                        orig_name = aux_stack.pop()
+                        if orig_name != instr.operands:
+                            a = None
+                            for x in self.stack.peek().names:
+                                if x.name == orig_name:
+                                    a = x
+                                    print("A")
+                            a.asname = instr.operands
+                        if len(aux_stack.data) == 0:
+                            tree.append(self.stack.pop())
+                    else:
+                        if isinstance(self.stack.peek(), ast.FunctionDef):
+                            tree.append(self.stack.pop())
+                        elif isinstance(self.stack.peek(), ast.ClassDef):
+                            self.stack.pop()
+                        else:
+                            x = ast.Assign([ast.Name(instr.operands, ast.Store())], self.stack.pop())
+                            x.lineno = None  # ?
+                            tree.append(x)
+                case "BUILD_TUPLE":
+                    n = int(instr.operands)
+                    l = [self.stack.pop() for _ in range(n)]
+                    t = tuple(l)
+                    self.stack.push(ast.Tuple(l))
+                case "BUILD_LIST":
+                    n = int(instr.operands)
+                    l = [self.stack.pop() for _ in range(n)]
+                    self.stack.push(ast.List(l))
+                case "POP_TOP":
+                    self.stack.pop()
+                case "LOAD_BUILD_CLASS":
+                    # self.stack.push(ast.ClassDef())
+                    aux_stack.push("BUILD_CLASS")
+                case "MAKE_FUNCTION":
+                    fcb = self.blocks[instr.operands]
+                    args = ast.arguments([], [ast.arg(x) for x in fcb.args], None, [], [], None, [])
+                    x = ast.FunctionDef(fcb.name, args, self.pass_0(instr.operands))
+                    x.decorator_list = []
+                    x.lineno = None
+                    self.stack.push(x)
+                case "RETURN_VALUE":
+                    tree.append(ast.Return(self.stack.pop()))
+                case "CALL_FUNCTION":
+                    if len(aux_stack.data) > 0 and aux_stack.peek() == "BUILD_CLASS":
+                        name = self.stack.pop()
+                        cls = self.stack.pop()
+                        cls = ast.ClassDef(name.value, [], {}, cls.body, [])
+                        tree.append(cls)
+                        aux_stack.pop()
+                        self.stack.push(cls)
+                    else:
+                        parts = instr.operands.split()
+                        n = int(parts[0].split('=')[1])
+                        nkw = int(parts[1].split('=')[1])
+                        kwargs = {}
+                        for _ in range(nkw):
+                            kwargs[self.stack.pop()] = self.stack.pop()
+                        args = [self.stack.pop() for _ in range(n)]
+                        self.stack.push(ast.Call(self.stack.pop(), args, kwargs))
+                        if next.opcode == "POP_TOP":
+                            tree.append(self.stack.peek())
+                case "LOAD_GLOBAL":
+                    self.stack.push(ast.Name(instr.operands, ast.Load()))
+                case "LOAD_METHOD":
+                    self.stack.push(ast.Attribute(self.stack.pop(), instr.operands))
+                    # self.stack.peek().id += f".{instr.operands}"
+                case "LOAD_FAST":
+                    n = int(instr.operands)
+                    if n < len(cb.args):
+                        self.stack.push(ast.Name(cb.args[n], ast.Load()))
+                    else:
+                        self.stack.push(ast.Name(f"local_{n-len(cb.args)}", ast.Load()))
+                case "STORE_FAST":
+                    n = int(instr.operands)
+                    if n < len(cb.args):
+                        v = ast.Name(cb.args[n], ast.Store())
+                    else:
+                        v = ast.Name(f"local_{n-len(cb.args)}", ast.Store())
+                    x = ast.Assign([v], self.stack.pop())
+                    x.lineno = None
+                    tree.append(x)
+                case "LOAD_ATTR":
+                    a = ast.Attribute(self.stack.pop(), instr.operands, ast.Load())
+                    self.stack.push(a)
+                case "LOAD_SUBSCR":
+                    sub = self.stack.pop()
+                    a = ast.Subscript(self.stack.pop(), sub, ast.Load())
+                    self.stack.push(a)
+                case "STORE_ATTR":
+                    obj = self.stack.pop()
+                    a = ast.Assign([ast.Attribute(obj, instr.operands, ast.Store())], self.stack.pop())
+                    a.lineno = None
+                    tree.append(a)
+                case "CALL_METHOD":
+                    parts = instr.operands.split()
+                    n = int(parts[0].split('=')[1])
+                    nkw = int(parts[1].split('=')[1])
+                    kwargs = []
+                    for _ in range(nkw):
+                        val = self.stack.pop()
+                        kwargs.append(ast.keyword(self.stack.pop().value, val))
+                    args = [self.stack.pop() for _ in range(n)]
+                    self.stack.push(ast.Call(self.stack.pop(), args, kwargs))
+                    if next.opcode == "POP_TOP":
+                        tree.append(self.stack.peek())
+                case "DUP_TOP":
+                    self.stack.push(self.stack.peek())
+                case "GET_ITER_STACK":
+                    self.stack.pop()
+                    break  # TODO
+                case "BINARY_OP":
+                    match instr.operands.split():
+                        case [n, "__gt__"]:
+                            n = int(n)
+                            nl = [self.stack.pop() for _ in range(n)]
+                            self.stack.push(ast.Compare(self.stack.pop(), [ast.Gt()], nl))
+                        case [n, "__iadd__"]:
+                            r = self.stack.pop()
+                            # tree.append(ast.Assign(x, ast.BinOp(x, ast.Add(), ast.Constant(n))))
+                            self.stack.push(ast.BinOp(self.stack.pop(), ast.Add(), r))
+                        case [n, "__isub__"]:
+                            r = self.stack.pop()
+                            # tree.append(ast.Assign(x, ast.BinOp(x, ast.Add(), ast.Constant(n))))
+                            self.stack.push(ast.BinOp(self.stack.pop(), ast.Sub(), r))
+                        case [n, "__add__"]:
+                            r = self.stack.pop()
+                            self.stack.push(ast.BinOp(self.stack.pop(), ast.Add(), r))
+                        case x:
+                            log.warning("AH")
+                case "ROT_TWO":
+                    a = self.stack.pop()
+                    b = self.stack.pop()
+                    self.stack.push(a)
+                    self.stack.push(b)
+                case "ROT_THREE":
+                    a = self.stack.pop()
+                    b = self.stack.pop()
+                    c = self.stack.pop()
+                    self.stack.push(b)
+                    self.stack.push(c)
+                    self.stack.push(a)
+                case "POP_JUMP_IF_TRUE":
+                    self.stack.pop()
+                    break  # TODO
+                case "FOR_ITER":
+                    aux_stack.push(int(instr.operands)+instr.offset)
+                case x:
+                    log.warning(f"Unknown \"{x}\"")
+            print(self.stack.dump(5))
+            print(aux_stack.dump(5))
+            # pprint(tree)
+            for x in tree:
+                print(ast.dump(x))
+            # if cb.name.startswith("move"):
+            #     input()
+
+        return tree
+
+    def decompile(self, top_name: str = "<module>") -> str:
         if self.blocks is None:
             self.disassemble()
 
@@ -219,16 +463,29 @@ class uDecompiler:
         buf.print(f"## At: {timestamp} ##")
         buf.print(f"####################################\n")
 
-        # TODO
-        l = uDisLexer(None)
-        # for x in l.lex(self):
-        #     log.debug(f"{x.type}: {x.value}")
-        trees = {}
-        for block in self.blocks.values():
-            trees[block.desc] = self.parser.parse(block)
-        for desc, t in trees.items():
-            pprint(desc)
-            pprint(t.pretty())
+        top_desc = None
+        for cb in self.blocks.values():
+            if cb.name == top_name:
+                top_desc = cb.desc
+                break
+
+        if top_desc is None:
+            log.error(f"Unable to find code block \'{top_name}\'")
+            return "ERROR"
+
+        statements = self.pass_0(top_desc)
+        mod = ast.Module(statements, [])
+
+        print("\n=============\n")
+        print(ast.dump(mod, indent=4))
+        print("\n=============\n")
+
+        lines = ast.unparse(mod).split('\n')
+        for l in lines:
+            buf.write(f"{l}\n")
+        # trees = {}
+        # for block in self.blocks.values():
+        #     trees[block.desc] = self.parser.parse(block)
 
         buf.print()
         return buf.dump()
